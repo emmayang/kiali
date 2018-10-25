@@ -3,7 +3,7 @@ SHELL=/bin/bash
 
 # Identifies the current build.
 # These will be embedded in the app and displayed when it starts.
-VERSION ?= v0.9.0-SNAPSHOT
+VERSION ?= v0.10.0-SNAPSHOT
 COMMIT_HASH ?= $(shell git rev-parse HEAD)
 
 # Indicates which version of the UI console is to be embedded
@@ -197,6 +197,15 @@ swagger-gen:
 ## swagger-serve: Serve the swagger.json in a website in local. Runs `swagger serve` internally
 swagger-serve: swagger-validate
 	@swagger serve ./swagger.json
+
+## swagger-travis: Check that swagger.json is the correct one
+swagger-travis: swagger-validate
+	@swagger generate spec -o ./swagger_copy.json
+	@cmp -s swagger.json swagger_copy.json; \
+	RETVAL=$$?; \
+	if [ $$RETVAL -ne 0 ]; then \
+            echo "SWAGGER FILE IS NOT CORRECT"; exit 1; \
+	fi
 
 #
 # cloud targets - building images and deploying

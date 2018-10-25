@@ -45,6 +45,7 @@ import (
 
 	"github.com/kiali/kiali/config"
 	"github.com/kiali/kiali/graph"
+	"github.com/kiali/kiali/graph/appender"
 	"github.com/kiali/kiali/graph/cytoscape"
 	"github.com/kiali/kiali/graph/options"
 	"github.com/kiali/kiali/log"
@@ -79,14 +80,16 @@ func graphNamespaces(o options.Options, client *prometheus.Client) graph.Traffic
 	log.Debugf("Build [%s] graph for [%v] namespaces [%s]", o.GraphType, len(o.Namespaces), o.Namespaces)
 
 	trafficMap := graph.NewTrafficMap()
+
+	globalInfo := appender.NewGlobalInfo()
 	for _, namespace := range o.Namespaces {
 		log.Debugf("Build traffic map for namespace [%s]", namespace)
-		namespaceTrafficMap := buildNamespaceTrafficMap(namespace, o, client)
-
+		namespaceTrafficMap := buildNamespaceTrafficMap(namespace.Name, o, client)
+		namespaceInfo := appender.NewNamespaceInfo(namespace.Name)
 		for _, a := range o.Appenders {
-			a.AppendGraph(namespaceTrafficMap, namespace)
+			a.AppendGraph(namespaceTrafficMap, globalInfo, namespaceInfo)
 		}
-		mergeTrafficMaps(trafficMap, namespaceTrafficMap)
+		mergeTrafficMaps(trafficMap, namespace.Name, namespaceTrafficMap)
 	}
 
 	// The appenders can add/remove/alter nodes. After the manipulations are complete
@@ -104,13 +107,22 @@ func graphNamespaces(o options.Options, client *prometheus.Client) graph.Traffic
 }
 
 // mergeTrafficMaps ensures that we only have unique nodes by removing duplicate
-// nodes and merging their edges.  We also need to avoid duplicate edges, it can
+// nodes and merging their edges.  When removing a duplicate prefer an instance
+// from the namespace being merged-in because it is guaranteed to have all appender
+// information applied. We also need to avoid duplicate edges, it can
 // happen when an terminal node of one namespace is a root node of another:
 //   ns1 graph: unknown -> ns1:A -> ns2:B
 //   ns2 graph:   ns1:A -> ns2:B -> ns2:C
-func mergeTrafficMaps(trafficMap, nsTrafficMap graph.TrafficMap) {
+func mergeTrafficMaps(trafficMap graph.TrafficMap, ns string, nsTrafficMap graph.TrafficMap) {
 	for nsId, nsNode := range nsTrafficMap {
 		if node, isDup := trafficMap[nsId]; isDup {
+			if nsNode.Namespace == ns {
+				// prefer nsNode (see above comment), so do a swap
+				trafficMap[nsId] = nsNode
+				temp := node
+				node = nsNode
+				nsNode = temp
+			}
 			for _, nsEdge := range nsNode.Edges {
 				isDupEdge := false
 				for _, e := range node.Edges {
@@ -140,12 +152,12 @@ func markOutsiders(trafficMap graph.TrafficMap, o options.Options) {
 	}
 }
 
-func isOutside(n *graph.Node, namespaces []string) bool {
+func isOutside(n *graph.Node, namespaces map[string]graph.NamespaceInfo) bool {
 	if n.Namespace == graph.UnknownNamespace {
 		return false
 	}
 	for _, ns := range namespaces {
-		if n.Namespace == ns {
+		if n.Namespace == ns.Name {
 			return false
 		}
 	}
@@ -252,6 +264,7 @@ func checkNodeType(expected string, n *graph.Node) {
 // nodes either directly send and/or receive requests from a node in the namespace.
 func buildNamespaceTrafficMap(namespace string, o options.Options, client *prometheus.Client) graph.TrafficMap {
 	httpMetric := "istio_requests_total"
+	duration := o.Namespaces[namespace].Duration
 
 	// query prometheus for request traffic in three queries:
 	// 1) query for traffic originating from "unknown" (i.e. the internet).
@@ -259,8 +272,8 @@ func buildNamespaceTrafficMap(namespace string, o options.Options, client *prome
 	query := fmt.Sprintf(`sum(rate(%s{reporter="destination",source_workload="unknown",destination_service_namespace="%s",response_code=~"%s"} [%vs])) by (%s)`,
 		httpMetric,
 		namespace,
-		"[2345][0-9][0-9]",        // regex for valid response_codes
-		int(o.Duration.Seconds()), // range duration for the query
+		"[2345][0-9][0-9]",      // regex for valid response_codes
+		int(duration.Seconds()), // range duration for the query
 		groupBy)
 	unkVector := promQuery(query, time.Unix(o.QueryTime, 0), client.API())
 
@@ -269,8 +282,8 @@ func buildNamespaceTrafficMap(namespace string, o options.Options, client *prome
 		httpMetric,
 		namespace,
 		namespace,
-		"[2345][0-9][0-9]",        // regex for valid response_codes
-		int(o.Duration.Seconds()), // range duration for the query
+		"[2345][0-9][0-9]",      // regex for valid response_codes
+		int(duration.Seconds()), // range duration for the query
 		groupBy)
 
 	// fetch the externally originating request traffic time-series
@@ -280,8 +293,8 @@ func buildNamespaceTrafficMap(namespace string, o options.Options, client *prome
 	query = fmt.Sprintf(`sum(rate(%s{reporter="source",source_workload_namespace="%s",response_code=~"%s"} [%vs])) by (%s)`,
 		httpMetric,
 		namespace,
-		"[2345][0-9][0-9]",        // regex for valid response_codes
-		int(o.Duration.Seconds()), // range duration for the query
+		"[2345][0-9][0-9]",      // regex for valid response_codes
+		int(duration.Seconds()), // range duration for the query
 		groupBy)
 
 	// fetch the internally originating request traffic time-series
@@ -303,8 +316,8 @@ func buildNamespaceTrafficMap(namespace string, o options.Options, client *prome
 				httpMetric,
 				namespace,
 				namespace,
-				"[2345][0-9][0-9]",        // regex for valid response_codes
-				int(o.Duration.Seconds()), // range duration for the query
+				"[2345][0-9][0-9]",      // regex for valid response_codes
+				int(duration.Seconds()), // range duration for the query
 				groupBy)
 
 			// fetch the externally originating request traffic time-series
@@ -317,8 +330,8 @@ func buildNamespaceTrafficMap(namespace string, o options.Options, client *prome
 			httpMetric,
 			namespace,
 			istioNamespace,
-			"[2345][0-9][0-9]",        // regex for valid response_codes
-			int(o.Duration.Seconds()), // range duration for the query
+			"[2345][0-9][0-9]",      // regex for valid response_codes
+			int(duration.Seconds()), // range duration for the query
 			groupBy)
 
 		// fetch the internally originating request traffic time-series
@@ -334,7 +347,7 @@ func buildNamespaceTrafficMap(namespace string, o options.Options, client *prome
 	query = fmt.Sprintf(`sum(rate(%s{reporter="destination",source_workload="unknown",destination_workload_namespace="%s"} [%vs])) by (%s)`,
 		tcpMetric,
 		namespace,
-		int(o.Duration.Seconds()), // range duration for the query
+		int(duration.Seconds()), // range duration for the query
 		tcpGroupBy)
 	tcpUnkVector := promQuery(query, time.Unix(o.QueryTime, 0), client.API())
 
@@ -344,7 +357,7 @@ func buildNamespaceTrafficMap(namespace string, o options.Options, client *prome
 		tcpMetric,
 		namespace,
 		namespace,
-		int(o.Duration.Seconds()), // range duration for the query
+		int(duration.Seconds()), // range duration for the query
 		tcpGroupBy)
 	tcpExtVector := promQuery(query, time.Unix(o.QueryTime, 0), client.API())
 
@@ -352,7 +365,7 @@ func buildNamespaceTrafficMap(namespace string, o options.Options, client *prome
 	query = fmt.Sprintf(`sum(rate(%s{reporter="source",source_workload_namespace="%s"} [%vs])) by (%s)`,
 		tcpMetric,
 		namespace,
-		int(o.Duration.Seconds()), // range duration for the query
+		int(duration.Seconds()), // range duration for the query
 		tcpGroupBy)
 	tcpInVector := promQuery(query, time.Unix(o.QueryTime, 0), client.API())
 
@@ -632,15 +645,23 @@ func graphNode(w http.ResponseWriter, r *http.Request, client *prometheus.Client
 		checkError(errors.New(fmt.Sprintf("Node graph does not support the 'namespaces' query parameter or the 'all' namespace")))
 	}
 
-	namespace := o.Namespaces[0]
-	n := graph.NewNode(namespace, o.NodeOptions.Workload, o.NodeOptions.App, o.NodeOptions.Version, o.NodeOptions.Service, o.GraphType)
+	// Here, it's true that o.Namespaces has only one item. So, it's safe to use "for" knowing
+	// that only one iteration will happen.
+	var n graph.Node
+	var namespace graph.NamespaceInfo
+	for _, namespace = range o.Namespaces {
+		n = graph.NewNode(namespace.Name, o.NodeOptions.Workload, o.NodeOptions.App, o.NodeOptions.Version, o.NodeOptions.Service, o.GraphType)
+	}
 
 	log.Debugf("Build graph for node [%+v]", n)
 
-	trafficMap := buildNodeTrafficMap(namespace, n, o, client)
+	trafficMap := buildNodeTrafficMap(namespace.Name, n, o, client)
+
+	globalInfo := appender.NewGlobalInfo()
+	namespaceInfo := appender.NewNamespaceInfo(namespace.Name)
 
 	for _, a := range o.Appenders {
-		a.AppendGraph(trafficMap, namespace)
+		a.AppendGraph(trafficMap, globalInfo, namespaceInfo)
 	}
 
 	// The appenders can add/remove/alter nodes. After the manipulations are complete
@@ -656,6 +677,7 @@ func graphNode(w http.ResponseWriter, r *http.Request, client *prometheus.Client
 // buildNodeTrafficMap returns a map of all nodes requesting or requested by the target node (key=id).
 func buildNodeTrafficMap(namespace string, n graph.Node, o options.Options, client *prometheus.Client) graph.TrafficMap {
 	httpMetric := "istio_requests_total"
+	interval := o.Namespaces[namespace].Duration
 
 	// query prometheus for request traffic in two queries:
 	// 1) query for incoming traffic
@@ -667,8 +689,8 @@ func buildNodeTrafficMap(namespace string, n graph.Node, o options.Options, clie
 			httpMetric,
 			namespace,
 			n.Workload,
-			"[2345][0-9][0-9]",        // regex for valid response_codes
-			int(o.Duration.Seconds()), // range duration for the query
+			"[2345][0-9][0-9]",      // regex for valid response_codes
+			int(interval.Seconds()), // range duration for the query
 			groupBy)
 	case graph.NodeTypeApp:
 		if n.Version != "" && n.Version != graph.UnknownVersion {
@@ -677,16 +699,16 @@ func buildNodeTrafficMap(namespace string, n graph.Node, o options.Options, clie
 				namespace,
 				n.App,
 				n.Version,
-				"[2345][0-9][0-9]",        // regex for valid response_codes
-				int(o.Duration.Seconds()), // range duration for the query
+				"[2345][0-9][0-9]",      // regex for valid response_codes
+				int(interval.Seconds()), // range duration for the query
 				groupBy)
 		} else {
 			query = fmt.Sprintf(`sum(rate(%s{reporter="destination",destination_service_namespace="%s",destination_app="%s",response_code=~"%s"} [%vs])) by (%s)`,
 				httpMetric,
 				namespace,
 				n.App,
-				"[2345][0-9][0-9]",        // regex for valid response_codes
-				int(o.Duration.Seconds()), // range duration for the query
+				"[2345][0-9][0-9]",      // regex for valid response_codes
+				int(interval.Seconds()), // range duration for the query
 				groupBy)
 		}
 	case graph.NodeTypeService:
@@ -694,8 +716,8 @@ func buildNodeTrafficMap(namespace string, n graph.Node, o options.Options, clie
 			httpMetric,
 			namespace,
 			n.Service,
-			"[2345][0-9][0-9]",        // regex for valid response_codes
-			int(o.Duration.Seconds()), // range duration for the query
+			"[2345][0-9][0-9]",      // regex for valid response_codes
+			int(interval.Seconds()), // range duration for the query
 			groupBy)
 	default:
 		checkError(errors.New(fmt.Sprintf("NodeType [%s] not supported", n.NodeType)))
@@ -709,8 +731,8 @@ func buildNodeTrafficMap(namespace string, n graph.Node, o options.Options, clie
 			httpMetric,
 			namespace,
 			n.Workload,
-			"[2345][0-9][0-9]",        // regex for valid response_codes
-			int(o.Duration.Seconds()), // range duration for the query
+			"[2345][0-9][0-9]",      // regex for valid response_codes
+			int(interval.Seconds()), // range duration for the query
 			groupBy)
 	case graph.NodeTypeApp:
 		if n.Version != "" && n.Version != graph.UnknownVersion {
@@ -719,16 +741,16 @@ func buildNodeTrafficMap(namespace string, n graph.Node, o options.Options, clie
 				namespace,
 				n.App,
 				n.Version,
-				"[2345][0-9][0-9]",        // regex for valid response_codes
-				int(o.Duration.Seconds()), // range duration for the query
+				"[2345][0-9][0-9]",      // regex for valid response_codes
+				int(interval.Seconds()), // range duration for the query
 				groupBy)
 		} else {
 			query = fmt.Sprintf(`sum(rate(%s{reporter="source",source_workload_namespace="%s",source_app="%s",response_code=~"%s"} [%vs])) by (%s)`,
 				httpMetric,
 				namespace,
 				n.App,
-				"[2345][0-9][0-9]",        // regex for valid response_codes
-				int(o.Duration.Seconds()), // range duration for the query
+				"[2345][0-9][0-9]",      // regex for valid response_codes
+				int(interval.Seconds()), // range duration for the query
 				groupBy)
 		}
 	case graph.NodeTypeService:
@@ -755,8 +777,8 @@ func buildNodeTrafficMap(namespace string, n graph.Node, o options.Options, clie
 				namespace,
 				n.Workload,
 				istioNamespace,
-				"[2345][0-9][0-9]",        // regex for valid response_codes
-				int(o.Duration.Seconds()), // range duration for the query
+				"[2345][0-9][0-9]",      // regex for valid response_codes
+				int(interval.Seconds()), // range duration for the query
 				groupBy)
 		case graph.NodeTypeApp:
 			if n.Version != "" && n.Version != graph.UnknownVersion {
@@ -766,8 +788,8 @@ func buildNodeTrafficMap(namespace string, n graph.Node, o options.Options, clie
 					n.App,
 					n.Version,
 					istioNamespace,
-					"[2345][0-9][0-9]",        // regex for valid response_codes
-					int(o.Duration.Seconds()), // range duration for the query
+					"[2345][0-9][0-9]",      // regex for valid response_codes
+					int(interval.Seconds()), // range duration for the query
 					groupBy)
 			} else {
 				query = fmt.Sprintf(`sum(rate(%s{reporter="destination",source_workload_namespace="%s",source_app="%s",destination_service_namespace="%s",response_code=~"%s"} [%vs])) by (%s)`,
@@ -775,8 +797,8 @@ func buildNodeTrafficMap(namespace string, n graph.Node, o options.Options, clie
 					namespace,
 					n.App,
 					istioNamespace,
-					"[2345][0-9][0-9]",        // regex for valid response_codes
-					int(o.Duration.Seconds()), // range duration for the query
+					"[2345][0-9][0-9]",      // regex for valid response_codes
+					int(interval.Seconds()), // range duration for the query
 					groupBy)
 			}
 		case graph.NodeTypeService:
@@ -784,8 +806,8 @@ func buildNodeTrafficMap(namespace string, n graph.Node, o options.Options, clie
 				httpMetric,
 				istioNamespace,
 				n.Service,
-				"[2345][0-9][0-9]",        // regex for valid response_codes
-				int(o.Duration.Seconds()), // range duration for the query
+				"[2345][0-9][0-9]",      // regex for valid response_codes
+				int(interval.Seconds()), // range duration for the query
 				groupBy)
 		default:
 			checkError(errors.New(fmt.Sprintf("NodeType [%s] not supported", n.NodeType)))
@@ -804,7 +826,7 @@ func buildNodeTrafficMap(namespace string, n graph.Node, o options.Options, clie
 			tcpMetric,
 			namespace,
 			n.Workload,
-			int(o.Duration.Seconds()), // range duration for the query
+			int(interval.Seconds()), // range duration for the query
 			tcpGroupBy)
 	case graph.NodeTypeApp:
 		if n.Version != "" && n.Version != graph.UnknownVersion {
@@ -813,14 +835,14 @@ func buildNodeTrafficMap(namespace string, n graph.Node, o options.Options, clie
 				namespace,
 				n.App,
 				n.Version,
-				int(o.Duration.Seconds()), // range duration for the query
+				int(interval.Seconds()), // range duration for the query
 				tcpGroupBy)
 		} else {
 			query = fmt.Sprintf(`sum(rate(%s{reporter="source",destination_service_namespace="%s",destination_app="%s"} [%vs])) by (%s)`,
 				tcpMetric,
 				namespace,
 				n.App,
-				int(o.Duration.Seconds()), // range duration for the query
+				int(interval.Seconds()), // range duration for the query
 				tcpGroupBy)
 		}
 	case graph.NodeTypeService:
@@ -828,7 +850,7 @@ func buildNodeTrafficMap(namespace string, n graph.Node, o options.Options, clie
 			tcpMetric,
 			namespace,
 			n.Service,
-			int(o.Duration.Seconds()), // range duration for the query
+			int(interval.Seconds()), // range duration for the query
 			groupBy)
 	default:
 		checkError(errors.New(fmt.Sprintf("NodeType [%s] not supported", n.NodeType)))
@@ -842,7 +864,7 @@ func buildNodeTrafficMap(namespace string, n graph.Node, o options.Options, clie
 			tcpMetric,
 			namespace,
 			n.Workload,
-			int(o.Duration.Seconds()), // range duration for the query
+			int(interval.Seconds()), // range duration for the query
 			groupBy)
 	case graph.NodeTypeApp:
 		if n.Version != "" && n.Version != graph.UnknownVersion {
@@ -851,14 +873,14 @@ func buildNodeTrafficMap(namespace string, n graph.Node, o options.Options, clie
 				namespace,
 				n.App,
 				n.Version,
-				int(o.Duration.Seconds()), // range duration for the query
+				int(interval.Seconds()), // range duration for the query
 				groupBy)
 		} else {
 			query = fmt.Sprintf(`sum(rate(%s{reporter="source",source_workload_namespace="%s",source_app="%s"} [%vs])) by (%s)`,
 				tcpMetric,
 				namespace,
 				n.App,
-				int(o.Duration.Seconds()), // range duration for the query
+				int(interval.Seconds()), // range duration for the query
 				groupBy)
 		}
 	case graph.NodeTypeService:

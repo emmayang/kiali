@@ -1,12 +1,14 @@
 package business
 
 import (
+	"fmt"
 	"k8s.io/api/apps/v1beta1"
 	"k8s.io/api/apps/v1beta2"
 	batch_v1 "k8s.io/api/batch/v1"
 	batch_v1beta1 "k8s.io/api/batch/v1beta1"
 
 	"testing"
+	"time"
 
 	"github.com/kiali/kiali/config"
 	"github.com/kiali/kiali/kubernetes/kubetest"
@@ -39,9 +41,10 @@ func TestGetServiceHealth(t *testing.T) {
 		assert.Equal("httpbin", args[1])
 	}).Return(prometheus.EnvoyServiceHealth{Inbound: prometheus.EnvoyRatio{Healthy: 1, Total: 1}}, nil)
 
-	prom.On("GetServiceRequestRates", mock.AnythingOfType("string"), mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(fakeServiceRequestCounters())
+	queryTime := time.Date(2017, 01, 15, 0, 0, 0, 0, time.UTC)
+	prom.On("GetServiceRequestRates", mock.AnythingOfType("string"), mock.AnythingOfType("string"), mock.AnythingOfType("string"), queryTime).Return(fakeServiceRequestCounters())
 
-	health, _ := hs.GetServiceHealth("ns", "httpbin", "1m")
+	health, _ := hs.GetServiceHealth("ns", "httpbin", "1m", queryTime)
 
 	k8s.AssertNumberOfCalls(t, "GetService", 1)
 	prom.AssertNumberOfCalls(t, "GetServiceHealth", 1)
@@ -78,9 +81,10 @@ func TestGetAppHealth(t *testing.T) {
 		assert.Equal("reviews", args[1])
 	}).Return(prometheus.EnvoyServiceHealth{Inbound: prometheus.EnvoyRatio{Healthy: 1, Total: 1}}, nil)
 
-	prom.On("GetAppRequestRates", mock.AnythingOfType("string"), mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(fakeOtherRequestCounters())
+	queryTime := time.Date(2017, 01, 15, 0, 0, 0, 0, time.UTC)
+	prom.On("GetAppRequestRates", mock.AnythingOfType("string"), mock.AnythingOfType("string"), mock.AnythingOfType("string"), queryTime).Return(fakeOtherRequestCounters())
 
-	health, _ := hs.GetAppHealth("ns", "reviews", "1m")
+	health, _ := hs.GetAppHealth("ns", "reviews", "1m", queryTime)
 
 	prom.AssertNumberOfCalls(t, "GetServiceHealth", 1)
 	prom.AssertNumberOfCalls(t, "GetAppRequestRates", 1)
@@ -97,20 +101,30 @@ func TestGetWorkloadHealth(t *testing.T) {
 	assert := assert.New(t)
 
 	// Setup mocks
+	notfound := fmt.Errorf("not found")
 	k8s := new(kubetest.K8SClientMock)
 	prom := new(prometheustest.PromClientMock)
 	conf := config.NewConfig()
 	config.Set(conf)
 	hs := HealthService{k8s: k8s, prom: prom}
+	k8s.On("IsOpenShift").Return(true)
 	k8s.On("GetDeployment", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Run(func(args mock.Arguments) {
 		assert.Equal("ns", args[0])
 		assert.Equal("reviews-v1", args[1])
 	}).Return(&fakeDeploymentsHealthReview()[0], nil)
+	k8s.On("GetDeploymentConfig", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(&osappsv1.DeploymentConfig{}, notfound)
+	k8s.On("GetReplicaSets", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]v1beta2.ReplicaSet{}, nil)
+	k8s.On("GetReplicationControllers", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]v1.ReplicationController{}, nil)
+	k8s.On("GetStatefulSet", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(&v1beta2.StatefulSet{}, notfound)
+	k8s.On("GetPods", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(FakePodsFromDaemonSet(), nil)
+	k8s.On("GetJobs", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]batch_v1.Job{}, nil)
+	k8s.On("GetCronJobs", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]batch_v1beta1.CronJob{}, nil)
 	k8s.On("GetPods", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return([]v1.Pod{}, nil)
 
-	prom.On("GetWorkloadRequestRates", mock.AnythingOfType("string"), mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(fakeOtherRequestCounters())
+	queryTime := time.Date(2017, 01, 15, 0, 0, 0, 0, time.UTC)
+	prom.On("GetWorkloadRequestRates", mock.AnythingOfType("string"), mock.AnythingOfType("string"), mock.AnythingOfType("string"), queryTime).Return(fakeOtherRequestCounters())
 
-	health, _ := hs.GetWorkloadHealth("ns", "reviews-v1", "1m")
+	health, _ := hs.GetWorkloadHealth("ns", "reviews-v1", "1m", queryTime)
 
 	k8s.AssertNumberOfCalls(t, "GetDeployment", 1)
 	prom.AssertNumberOfCalls(t, "GetWorkloadRequestRates", 1)

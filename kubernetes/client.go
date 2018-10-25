@@ -7,6 +7,7 @@ import (
 
 	"k8s.io/api/apps/v1beta1"
 	"k8s.io/api/apps/v1beta2"
+	auth_v1 "k8s.io/api/authorization/v1"
 	batch_v1 "k8s.io/api/batch/v1"
 	batch_v1beta1 "k8s.io/api/batch/v1beta1"
 	"k8s.io/api/core/v1"
@@ -45,8 +46,10 @@ type IstioClientInterface interface {
 	GetIstioRuleDetails(namespace string, istiorule string) (*IstioRuleDetails, error)
 	GetJob(namespace string, jobName string) (*batch_v1.Job, error)
 	GetJobs(namespace string) ([]batch_v1.Job, error)
+	GetNamespace(namespace string) (*v1.Namespace, error)
 	GetNamespaces() ([]v1.Namespace, error)
 	GetPods(namespace, labelSelector string) ([]v1.Pod, error)
+	GetProject(project string) (*osv1.Project, error)
 	GetProjects() ([]osv1.Project, error)
 	GetReplicationController(namespace string, replicationcontrollerName string) (*v1.ReplicationController, error)
 	GetReplicationControllers(namespace string) ([]v1.ReplicationController, error)
@@ -64,6 +67,7 @@ type IstioClientInterface interface {
 	GetQuotaSpecs(namespace string) ([]IstioObject, error)
 	GetQuotaSpecBinding(namespace string, quotaSpecBindingName string) (IstioObject, error)
 	GetQuotaSpecBindings(namespace string) ([]IstioObject, error)
+	GetSelfSubjectAccessReview(namespace, api, resourceType string, verbs []string) ([]*auth_v1.SelfSubjectAccessReview, error)
 	IsOpenShift() bool
 }
 
