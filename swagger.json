@@ -822,7 +822,7 @@
             "type": "string",
             "default": "run all appenders",
             "x-go-name": "Name",
-            "description": "Comma-separated list of Appenders to run. Available appenders: [dead_node, istio_details, response_time, security_policy, sidecars_check, unused_node].",
+            "description": "Comma-separated list of Appenders to run. Available appenders: [deadNode, istio, responseTime, securityPolicy, sidecarsCheck, unusedNode].",
             "name": "appenders",
             "in": "query"
           },
@@ -923,7 +923,7 @@
             "type": "string",
             "default": "run all appenders",
             "x-go-name": "Name",
-            "description": "Comma-separated list of Appenders to run. Available appenders: [dead_node, istio_details, response_time, security_policy, sidecars_check, unused_node].",
+            "description": "Comma-separated list of Appenders to run. Available appenders: [deadNode, istio, responseTime, securityPolicy, sidecarsCheck, unusedNode].",
             "name": "appenders",
             "in": "query"
           },
@@ -1051,6 +1051,9 @@
           "200": {
             "$ref": "#/responses/appDetails"
           },
+          "404": {
+            "$ref": "#/responses/notFoundError"
+          },
           "500": {
             "$ref": "#/responses/internalError"
           }
@@ -1084,7 +1087,7 @@
             "type": "string",
             "default": "run all appenders",
             "x-go-name": "Name",
-            "description": "Comma-separated list of Appenders to run. Available appenders: [dead_node, istio_details, response_time, security_policy, sidecars_check, unused_node].",
+            "description": "Comma-separated list of Appenders to run. Available appenders: [deadNode, istio, responseTime, securityPolicy, sidecarsCheck, unusedNode].",
             "name": "appenders",
             "in": "query"
           },
@@ -1326,6 +1329,9 @@
           "200": {
             "$ref": "#/responses/namespaceValidationsResponse"
           },
+          "404": {
+            "$ref": "#/responses/notFoundError"
+          },
           "500": {
             "$ref": "#/responses/internalError"
           }
@@ -1446,7 +1452,7 @@
             "type": "string",
             "default": "run all appenders",
             "x-go-name": "Name",
-            "description": "Comma-separated list of Appenders to run. Available appenders: [dead_node, istio_details, response_time, security_policy, sidecars_check, unused_node].",
+            "description": "Comma-separated list of Appenders to run. Available appenders: [deadNode, istio, responseTime, securityPolicy, sidecarsCheck, unusedNode].",
             "name": "appenders",
             "in": "query"
           },
@@ -1533,6 +1539,9 @@
           "200": {
             "$ref": "#/responses/typeValidationsResponse"
           },
+          "404": {
+            "$ref": "#/responses/notFoundError"
+          },
           "500": {
             "$ref": "#/responses/internalError"
           }
@@ -1609,6 +1618,9 @@
           "200": {
             "$ref": "#/responses/workloadDetails"
           },
+          "404": {
+            "$ref": "#/responses/notFoundError"
+          },
           "500": {
             "$ref": "#/responses/internalError"
           }
@@ -1650,7 +1662,7 @@
             "type": "string",
             "default": "run all appenders",
             "x-go-name": "Name",
-            "description": "Comma-separated list of Appenders to run. Available appenders: [dead_node, istio_details, response_time, security_policy, sidecars_check, unused_node].",
+            "description": "Comma-separated list of Appenders to run. Available appenders: [deadNode, istio, responseTime, securityPolicy, sidecarsCheck, unusedNode].",
             "name": "appenders",
             "in": "query"
           },

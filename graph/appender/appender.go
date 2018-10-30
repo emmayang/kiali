@@ -4,7 +4,6 @@ import (
 	"github.com/kiali/kiali/business"
 	"github.com/kiali/kiali/config"
 	"github.com/kiali/kiali/graph"
-	"github.com/kiali/kiali/kubernetes"
 	"github.com/kiali/kiali/models"
 	"github.com/kiali/kiali/prometheus"
 )
@@ -14,9 +13,8 @@ import (
 // can re-use the information.  A new instance is generated for graph and
 // is initially empty.
 type GlobalInfo struct {
-	Business    *business.Layer
-	IstioClient *kubernetes.IstioClient
-	PromClient  *prometheus.Client
+	Business   *business.Layer
+	PromClient *prometheus.Client
 }
 
 func NewGlobalInfo() *GlobalInfo {
@@ -72,4 +70,7 @@ type Appender interface {
 	// AppendGraph performs the appender work on the provided traffic map. The map
 	// may be initially empty. An appender is allowed to add or remove map entries.
 	AppendGraph(trafficMap graph.TrafficMap, globalInfo *GlobalInfo, namespaceInfo *NamespaceInfo)
+
+	// Name returns a unique appender name and which is the name used to identify the appender (e.g in 'appenders' query param)
+	Name() string
 }

@@ -60,7 +60,7 @@ func NewRoutes() (r *Routes) {
 		//      500: internalError
 		//      200: tokenGenerated
 		{ // Request the token
-			"Status",
+			"Token",
 			"GET",
 			"/api/token",
 			handlers.GetToken,
@@ -127,6 +127,28 @@ func NewRoutes() (r *Routes) {
 			handlers.IstioConfigDetails,
 			true,
 		},
+		// swagger:route DELETE /namespaces/{namespace}/istio/{object_type}/{object}
+		// ---
+		// Endpoint to delete the Istio Config of an (arbitrary) Istio object
+		//
+		//     Produces:
+		//     - application/json
+		//
+		//     Schemes: http, https
+		//
+		// responses:
+		//      default: genericError
+		//      404: notFoundError
+		//      500: internalError
+		//      200: delete
+		//
+		{
+			"IstioConfigDelete",
+			"DELETE",
+			"/api/namespaces/{namespace}/istio/{object_type}/{object}",
+			handlers.IstioConfigDelete,
+			true,
+		},
 		// swagger:route GET /namespaces/{namespace}/istio/{object_type}/{object}/istio_validations config objectValidations
 		// ---
 		// Endpoint to get the list of istio object validations for a service
@@ -143,7 +165,7 @@ func NewRoutes() (r *Routes) {
 		//      200: typeValidationsResponse
 		//
 		{
-			"IstioConfigValidation",
+			"IstioConfigValidations",
 			"GET",
 			"/api/namespaces/{namespace}/istio/{object_type}/{object}/istio_validations",
 			handlers.IstioConfigValidations,
@@ -221,10 +243,11 @@ func NewRoutes() (r *Routes) {
 		//
 		// responses:
 		//      500: internalError
+		//      404: notFoundError
 		//      200: workloadDetails
 		//
 		{
-			"workloadDetails",
+			"WorkloadDetails",
 			"GET",
 			"/api/namespaces/{namespace}/workloads/{workload}",
 			handlers.WorkloadDetails,
@@ -261,10 +284,11 @@ func NewRoutes() (r *Routes) {
 		//
 		// responses:
 		//      500: internalError
+		//      404: notFoundError
 		//      200: appDetails
 		//
 		{
-			"appDetails",
+			"AppDetails",
 			"GET",
 			"/api/namespaces/{namespace}/apps/{app}",
 			handlers.AppDetails,
@@ -422,6 +446,7 @@ func NewRoutes() (r *Routes) {
 		//
 		// responses:
 		//      500: internalError
+		//      404: notFoundError
 		//      200: typeValidationsResponse
 		//
 		{
@@ -484,6 +509,7 @@ func NewRoutes() (r *Routes) {
 		//
 		// responses:
 		//      500: internalError
+		//      404: notFoundError
 		//      200: namespaceValidationsResponse
 		//
 		{

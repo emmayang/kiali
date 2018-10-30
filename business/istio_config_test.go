@@ -8,13 +8,14 @@ import (
 	auth_v1 "k8s.io/api/authorization/v1"
 	meta_v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"github.com/kiali/kiali/config"
 	"github.com/kiali/kiali/kubernetes"
 	"github.com/kiali/kiali/kubernetes/kubetest"
 	"github.com/kiali/kiali/models"
 	"github.com/kiali/kiali/tests/data"
 )
 
-func TestGetIstioConfig(t *testing.T) {
+func TestGetIstioConfigList(t *testing.T) {
 	assert := assert.New(t)
 	criteria := IstioConfigCriteria{
 		Namespace:               "test",
@@ -26,9 +27,9 @@ func TestGetIstioConfig(t *testing.T) {
 		IncludeQuotaSpecs:       false,
 	}
 
-	configService := mockGetIstioConfig()
+	configService := mockGetIstioConfigList()
 
-	istioconfigList, err := configService.GetIstioConfig(criteria)
+	istioconfigList, err := configService.GetIstioConfigList(criteria)
 
 	assert.Equal(0, len(istioconfigList.Gateways))
 	assert.Equal(0, len(istioconfigList.VirtualServices))
@@ -41,7 +42,7 @@ func TestGetIstioConfig(t *testing.T) {
 
 	criteria.IncludeGateways = true
 
-	istioconfigList, err = configService.GetIstioConfig(criteria)
+	istioconfigList, err = configService.GetIstioConfigList(criteria)
 
 	assert.Equal(2, len(istioconfigList.Gateways))
 	assert.Equal(0, len(istioconfigList.VirtualServices))
@@ -54,7 +55,7 @@ func TestGetIstioConfig(t *testing.T) {
 
 	criteria.IncludeVirtualServices = true
 
-	istioconfigList, err = configService.GetIstioConfig(criteria)
+	istioconfigList, err = configService.GetIstioConfigList(criteria)
 
 	assert.Equal(2, len(istioconfigList.Gateways))
 	assert.Equal(2, len(istioconfigList.VirtualServices))
@@ -67,7 +68,7 @@ func TestGetIstioConfig(t *testing.T) {
 
 	criteria.IncludeDestinationRules = true
 
-	istioconfigList, err = configService.GetIstioConfig(criteria)
+	istioconfigList, err = configService.GetIstioConfigList(criteria)
 
 	assert.Equal(2, len(istioconfigList.Gateways))
 	assert.Equal(2, len(istioconfigList.VirtualServices))
@@ -80,7 +81,7 @@ func TestGetIstioConfig(t *testing.T) {
 
 	criteria.IncludeServiceEntries = true
 
-	istioconfigList, err = configService.GetIstioConfig(criteria)
+	istioconfigList, err = configService.GetIstioConfigList(criteria)
 
 	assert.Equal(2, len(istioconfigList.Gateways))
 	assert.Equal(2, len(istioconfigList.VirtualServices))
@@ -93,7 +94,7 @@ func TestGetIstioConfig(t *testing.T) {
 
 	criteria.IncludeRules = true
 
-	istioconfigList, err = configService.GetIstioConfig(criteria)
+	istioconfigList, err = configService.GetIstioConfigList(criteria)
 
 	assert.Equal(2, len(istioconfigList.Gateways))
 	assert.Equal(2, len(istioconfigList.VirtualServices))
@@ -106,7 +107,7 @@ func TestGetIstioConfig(t *testing.T) {
 
 	criteria.IncludeQuotaSpecs = true
 
-	istioconfigList, err = configService.GetIstioConfig(criteria)
+	istioconfigList, err = configService.GetIstioConfigList(criteria)
 
 	assert.Equal(2, len(istioconfigList.Gateways))
 	assert.Equal(2, len(istioconfigList.VirtualServices))
@@ -119,7 +120,7 @@ func TestGetIstioConfig(t *testing.T) {
 
 	criteria.IncludeQuotaSpecBindings = true
 
-	istioconfigList, err = configService.GetIstioConfig(criteria)
+	istioconfigList, err = configService.GetIstioConfigList(criteria)
 
 	assert.Equal(2, len(istioconfigList.Gateways))
 	assert.Equal(2, len(istioconfigList.VirtualServices))
@@ -165,7 +166,7 @@ func TestGetIstioConfigDetails(t *testing.T) {
 	assert.Error(err)
 }
 
-func mockGetIstioConfig() IstioConfigService {
+func mockGetIstioConfigList() IstioConfigService {
 	k8s := new(kubetest.K8SClientMock)
 	k8s.On("GetGateways", mock.AnythingOfType("string")).Return(fakeGetGateways(), nil)
 	k8s.On("GetVirtualServices", mock.AnythingOfType("string"), mock.AnythingOfType("string")).Return(fakeGetVirtualServices(), nil)
@@ -469,4 +470,135 @@ func mockGetIstioConfigDetails() IstioConfigService {
 	k8s.On("GetSelfSubjectAccessReview", "test", mock.AnythingOfType("string"), mock.AnythingOfType("string"), mock.AnythingOfType("[]string")).Return(fakeGetSelfSubjectAccessReview(), nil)
 
 	return IstioConfigService{k8s: k8s}
+}
+
+func TestIsValidHost(t *testing.T) {
+	conf := config.NewConfig()
+	config.Set(conf)
+
+	virtualServiceIstioObject := kubernetes.MockIstioObject{
+		ObjectMeta: meta_v1.ObjectMeta{
+			Name: "reviews",
+		},
+		Spec: map[string]interface{}{
+			"hosts": []interface{}{
+				"reviews",
+			},
+			"http": []interface{}{
+				map[string]interface{}{
+					"route": []interface{}{
+						map[string]interface{}{
+							"destination": map[string]interface{}{
+								"host":   "reviews",
+								"subset": "v2",
+							},
+							"weight": 50,
+						},
+						map[string]interface{}{
+							"destination": map[string]interface{}{
+								"host":   "reviews",
+								"subset": "v3",
+							},
+							"weight": 50,
+						},
+					},
+				},
+			},
+		},
+	}
+	virtualService := models.VirtualService{}
+	virtualService.Parse(virtualServiceIstioObject.DeepCopyIstioObject())
+
+	assert.False(t, virtualService.IsValidHost("", ""))
+	assert.False(t, virtualService.IsValidHost("", "ratings"))
+	assert.True(t, virtualService.IsValidHost("", "reviews"))
+}
+
+func TestHasCircuitBreaker(t *testing.T) {
+	conf := config.NewConfig()
+	config.Set(conf)
+
+	// Note - I don't think the subset definitions here have any impact on the CB
+	// detection. They do not do any sort of override so presumably any version, including
+	// a v3 would inherit the DR-level CB definition.
+	destinationRule1 := kubernetes.MockIstioObject{
+		Spec: map[string]interface{}{
+			"host": "reviews",
+			"trafficPolicy": map[string]interface{}{
+				"connectionPool": map[string]interface{}{
+					"http": map[string]interface{}{
+						"maxRequestsPerConnection": 100,
+					},
+				},
+				"outlierDetection": map[string]interface{}{
+					"http": map[string]interface{}{
+						"consecutiveErrors": 50,
+					},
+				},
+			},
+			"subsets": []interface{}{
+				map[string]interface{}{
+					"name": "v1",
+					"labels": map[string]interface{}{
+						"version": "v1",
+					},
+				},
+				map[string]interface{}{
+					"name": "v2",
+					"labels": map[string]interface{}{
+						"version": "v2",
+					},
+				},
+			},
+		},
+	}
+	dRule1 := models.DestinationRule{}
+	dRule1.Parse(destinationRule1.DeepCopyIstioObject())
+
+	assert.False(t, dRule1.HasCircuitBreaker("", "", ""))
+	assert.True(t, dRule1.HasCircuitBreaker("", "reviews", ""))
+	assert.False(t, dRule1.HasCircuitBreaker("", "reviews-bad", ""))
+	assert.True(t, dRule1.HasCircuitBreaker("", "reviews", "v1"))
+	assert.True(t, dRule1.HasCircuitBreaker("", "reviews", "v2"))
+	assert.True(t, dRule1.HasCircuitBreaker("", "reviews", "v3"))
+	assert.False(t, dRule1.HasCircuitBreaker("", "reviews-bad", "v2"))
+
+	destinationRule2 := kubernetes.MockIstioObject{
+		Spec: map[string]interface{}{
+			"host": "reviews",
+			"subsets": []interface{}{
+				map[string]interface{}{
+					"name": "v1",
+					"labels": map[string]interface{}{
+						"version": "v1",
+					},
+				},
+				map[string]interface{}{
+					"name": "v2",
+					"labels": map[string]interface{}{
+						"version": "v2",
+					},
+					"trafficPolicy": map[string]interface{}{
+						"connectionPool": map[string]interface{}{
+							"http": map[string]interface{}{
+								"maxRequestsPerConnection": 100,
+							},
+						},
+						"outlierDetection": map[string]interface{}{
+							"http": map[string]interface{}{
+								"consecutiveErrors": 50,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	dRule2 := models.DestinationRule{}
+	dRule2.Parse(destinationRule2.DeepCopyIstioObject())
+
+	assert.True(t, dRule2.HasCircuitBreaker("", "reviews", ""))
+	assert.False(t, dRule2.HasCircuitBreaker("", "reviews", "v1"))
+	assert.True(t, dRule2.HasCircuitBreaker("", "reviews", "v2"))
+	assert.False(t, dRule2.HasCircuitBreaker("", "reviews-bad", "v2"))
 }

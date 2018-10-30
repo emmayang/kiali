@@ -50,6 +50,7 @@ import (
 	"github.com/kiali/kiali/graph/options"
 	"github.com/kiali/kiali/log"
 	"github.com/kiali/kiali/prometheus"
+	"github.com/kiali/kiali/prometheus/internalmetrics"
 )
 
 // GraphNamespace is a REST http.HandlerFunc handling namespace-wide graph
@@ -66,8 +67,17 @@ func GraphNamespace(w http.ResponseWriter, r *http.Request) {
 // graphNamespace provides a testing hook that can supply a mock client
 func graphNamespace(w http.ResponseWriter, r *http.Request, client *prometheus.Client) {
 	o := options.NewOptions(r)
+
+	// time how long it takes to generate this graph
+	promtimer := internalmetrics.GetGraphGenerationTimePrometheusTimer(o.GetGraphKind(), o.GraphType, o.InjectServiceNodes)
+	defer promtimer.ObserveDuration()
+
 	trafficMap := graphNamespaces(o, client)
 	generateGraph(trafficMap, w, o)
+
+	// update metrics
+	internalmetrics.IncrementGraphsGenerated(o.GetGraphKind(), o.GraphType, o.InjectServiceNodes)
+	internalmetrics.SetGraphNodes(o.GetGraphKind(), o.GraphType, o.InjectServiceNodes, len(trafficMap))
 }
 
 func graphNamespaces(o options.Options, client *prometheus.Client) graph.TrafficMap {
@@ -87,7 +97,9 @@ func graphNamespaces(o options.Options, client *prometheus.Client) graph.Traffic
 		namespaceTrafficMap := buildNamespaceTrafficMap(namespace.Name, o, client)
 		namespaceInfo := appender.NewNamespaceInfo(namespace.Name)
 		for _, a := range o.Appenders {
+			appenderTimer := internalmetrics.GetGraphAppenderTimePrometheusTimer(a.Name())
 			a.AppendGraph(namespaceTrafficMap, globalInfo, namespaceInfo)
+			appenderTimer.ObserveDuration()
 		}
 		mergeTrafficMaps(trafficMap, namespace.Name, namespaceTrafficMap)
 	}
@@ -645,6 +657,10 @@ func graphNode(w http.ResponseWriter, r *http.Request, client *prometheus.Client
 		checkError(errors.New(fmt.Sprintf("Node graph does not support the 'namespaces' query parameter or the 'all' namespace")))
 	}
 
+	// time how long it takes to generate this graph
+	promtimer := internalmetrics.GetGraphGenerationTimePrometheusTimer(o.GetGraphKind(), o.GraphType, o.InjectServiceNodes)
+	defer promtimer.ObserveDuration()
+
 	// Here, it's true that o.Namespaces has only one item. So, it's safe to use "for" knowing
 	// that only one iteration will happen.
 	var n graph.Node
@@ -661,7 +677,9 @@ func graphNode(w http.ResponseWriter, r *http.Request, client *prometheus.Client
 	namespaceInfo := appender.NewNamespaceInfo(namespace.Name)
 
 	for _, a := range o.Appenders {
+		appenderTimer := internalmetrics.GetGraphAppenderTimePrometheusTimer(a.Name())
 		a.AppendGraph(trafficMap, globalInfo, namespaceInfo)
+		appenderTimer.ObserveDuration()
 	}
 
 	// The appenders can add/remove/alter nodes. After the manipulations are complete
@@ -672,12 +690,19 @@ func graphNode(w http.ResponseWriter, r *http.Request, client *prometheus.Client
 	markTrafficGenerators(trafficMap)
 
 	generateGraph(trafficMap, w, o)
+
+	// update metrics
+	internalmetrics.IncrementGraphsGenerated(o.GetGraphKind(), o.GraphType, o.InjectServiceNodes)
+	internalmetrics.SetGraphNodes(o.GetGraphKind(), o.GraphType, o.InjectServiceNodes, len(trafficMap))
 }
 
 // buildNodeTrafficMap returns a map of all nodes requesting or requested by the target node (key=id).
 func buildNodeTrafficMap(namespace string, n graph.Node, o options.Options, client *prometheus.Client) graph.TrafficMap {
 	httpMetric := "istio_requests_total"
 	interval := o.Namespaces[namespace].Duration
+
+	// create map to aggregate traffic by response code
+	trafficMap := graph.NewTrafficMap()
 
 	// query prometheus for request traffic in two queries:
 	// 1) query for incoming traffic
@@ -712,6 +737,18 @@ func buildNodeTrafficMap(namespace string, n graph.Node, o options.Options, clie
 				groupBy)
 		}
 	case graph.NodeTypeService:
+		// for service requests we want source reporting to capture source-reported errors.  But unknown only generates destination telemetry.  So
+		// perform a special query just to capture [successful] request telemetry from unknown.
+		query = fmt.Sprintf(`sum(rate(%s{reporter="destination",source_workload="unknown",destination_service_namespace="%s",destination_service_name="%s",response_code=~"%s"} [%vs])) by (%s)`,
+			httpMetric,
+			namespace,
+			n.Service,
+			"[2345][0-9][0-9]",      // regex for valid response_codes
+			int(interval.Seconds()), // range duration for the query
+			groupBy)
+		vector := promQuery(query, time.Unix(o.QueryTime, 0), client.API())
+		populateTrafficMapHttp(trafficMap, &vector, o)
+
 		query = fmt.Sprintf(`sum(rate(%s{reporter="source",destination_service_namespace="%s",destination_service_name="%s",response_code=~"%s"} [%vs])) by (%s)`,
 			httpMetric,
 			namespace,
@@ -760,8 +797,6 @@ func buildNodeTrafficMap(namespace string, n graph.Node, o options.Options, clie
 	}
 	outVector := promQuery(query, time.Unix(o.QueryTime, 0), client.API())
 
-	// create map to aggregate traffic by response code
-	trafficMap := graph.NewTrafficMap()
 	populateTrafficMapHttp(trafficMap, &inVector, o)
 	populateTrafficMapHttp(trafficMap, &outVector, o)
 
@@ -819,7 +854,7 @@ func buildNodeTrafficMap(namespace string, n graph.Node, o options.Options, clie
 	// Section for TCP services
 	tcpMetric := "istio_tcp_sent_bytes_total"
 
-	tcpGroupBy := "source_workload_namespace,source_workload,source_app,source_version,destination_workload_namespace,destination_service_name,destination_workload,destination_app,destination_version"
+	tcpGroupBy := "source_workload_namespace,source_workload,source_app,source_version,destination_service_namespace,destination_service_name,destination_workload,destination_app,destination_version"
 	switch n.NodeType {
 	case graph.NodeTypeWorkload:
 		query = fmt.Sprintf(`sum(rate(%s{reporter="source",destination_workload_namespace="%s",destination_workload="%s"} [%vs])) by (%s)`,
@@ -846,12 +881,13 @@ func buildNodeTrafficMap(namespace string, n graph.Node, o options.Options, clie
 				tcpGroupBy)
 		}
 	case graph.NodeTypeService:
+		// TODO: Do we need to handle requests from unknown in a special way (like in HTTP above)? Not sure how tcp is reported from unknown.
 		query = fmt.Sprintf(`sum(rate(%s{reporter="source",destination_service_namespace="%s",destination_service_name="%s"} [%vs])) by (%s)`,
 			tcpMetric,
 			namespace,
 			n.Service,
 			int(interval.Seconds()), // range duration for the query
-			groupBy)
+			tcpGroupBy)
 	default:
 		checkError(errors.New(fmt.Sprintf("NodeType [%s] not supported", n.NodeType)))
 	}
@@ -865,7 +901,7 @@ func buildNodeTrafficMap(namespace string, n graph.Node, o options.Options, clie
 			namespace,
 			n.Workload,
 			int(interval.Seconds()), // range duration for the query
-			groupBy)
+			tcpGroupBy)
 	case graph.NodeTypeApp:
 		if n.Version != "" && n.Version != graph.UnknownVersion {
 			query = fmt.Sprintf(`sum(rate(%s{reporter="source",source_workload_namespace="%s",source_app="%s",source_version="%s"} [%vs])) by (%s)`,
@@ -874,14 +910,14 @@ func buildNodeTrafficMap(namespace string, n graph.Node, o options.Options, clie
 				n.App,
 				n.Version,
 				int(interval.Seconds()), // range duration for the query
-				groupBy)
+				tcpGroupBy)
 		} else {
 			query = fmt.Sprintf(`sum(rate(%s{reporter="source",source_workload_namespace="%s",source_app="%s"} [%vs])) by (%s)`,
 				tcpMetric,
 				namespace,
 				n.App,
 				int(interval.Seconds()), // range duration for the query
-				groupBy)
+				tcpGroupBy)
 		}
 	case graph.NodeTypeService:
 		query = ""
@@ -898,6 +934,9 @@ func buildNodeTrafficMap(namespace string, n graph.Node, o options.Options, clie
 
 func generateGraph(trafficMap graph.TrafficMap, w http.ResponseWriter, o options.Options) {
 	log.Debugf("Generating config for [%s] service graph...", o.Vendor)
+
+	promtimer := internalmetrics.GetGraphMarshalTimePrometheusTimer(o.GetGraphKind(), o.GraphType, o.InjectServiceNodes)
+	defer promtimer.ObserveDuration()
 
 	var vendorConfig interface{}
 	switch o.Vendor {
@@ -923,8 +962,10 @@ func promQuery(query string, queryTime time.Time, api v1.API) model.Vector {
 	query = fmt.Sprintf("round(%s,0.001)", query)
 	log.Debugf("Graph query:\n%s@time=%v (now=%v, %v)\n", query, queryTime.Format(graph.TF), time.Now().Format(graph.TF), queryTime.Unix())
 
+	promtimer := internalmetrics.GetPrometheusProcessingTimePrometheusTimer("Graph-Generation")
 	value, err := api.Query(ctx, query, queryTime)
 	checkError(err)
+	promtimer.ObserveDuration() // notice we only collect metrics for successful prom queries
 
 	switch t := value.Type(); t {
 	case model.ValVector: // Instant Vector

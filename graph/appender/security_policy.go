@@ -12,13 +12,21 @@ import (
 	"github.com/kiali/kiali/prometheus"
 )
 
+const SecurityPolicyAppenderName = "securityPolicy"
+
 // SecurityPolicyAppender is responsible for adding securityPolicy information to the graph.
 // The appender currently reports only mutual_tls security although is written in a generic way.
+// Name: securityPolicy
 type SecurityPolicyAppender struct {
 	GraphType    string
 	IncludeIstio bool
 	Namespaces   map[string]graph.NamespaceInfo
 	QueryTime    int64 // unix time in seconds
+}
+
+// Name implements Appender
+func (a SecurityPolicyAppender) Name() string {
+	return SecurityPolicyAppenderName
 }
 
 // AppendGraph implements Appender
@@ -50,7 +58,7 @@ func (a SecurityPolicyAppender) appendGraph(trafficMap graph.TrafficMap, namespa
 		"[2345][0-9][0-9]",      // regex for valid response_codes
 		int(duration.Seconds()), // range duration for the query
 		groupBy)
-	outVector := promQuery(query, time.Unix(a.QueryTime, 0), client.API())
+	outVector := promQuery(query, time.Unix(a.QueryTime, 0), client.API(), a)
 
 	// 2) query for active_security originating from a workload inside of the namespace
 	istioCondition := ""
@@ -64,7 +72,7 @@ func (a SecurityPolicyAppender) appendGraph(trafficMap graph.TrafficMap, namespa
 		"[2345][0-9][0-9]",      // regex for valid response_codes
 		int(duration.Seconds()), // range duration for the query
 		groupBy)
-	inVector := promQuery(query, time.Unix(a.QueryTime, 0), client.API())
+	inVector := promQuery(query, time.Unix(a.QueryTime, 0), client.API(), a)
 
 	// create map to quickly look up responseTime
 	securityPolicyMap := make(map[string]string)

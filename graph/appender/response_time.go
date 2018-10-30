@@ -13,12 +13,14 @@ import (
 )
 
 const (
-	DefaultQuantile = 0.95 // 95th percentile
+	DefaultQuantile          = 0.95 // 95th percentile
+	ResponseTimeAppenderName = "responseTime"
 )
 
 // ResponseTimeAppender is responsible for adding responseTime information to the graph. ResponseTime
 // is represented as a percentile value. The default is 95th percentile, which means that
 // 95% of requests executed in no more than the resulting milliseconds.
+// Name: responseTime
 type ResponseTimeAppender struct {
 	GraphType          string
 	InjectServiceNodes bool
@@ -26,6 +28,11 @@ type ResponseTimeAppender struct {
 	Namespaces         map[string]graph.NamespaceInfo
 	Quantile           float64
 	QueryTime          int64 // unix time in seconds
+}
+
+// Name implements Appender
+func (a ResponseTimeAppender) Name() string {
+	return ResponseTimeAppenderName
 }
 
 // AppendGraph implements Appender
@@ -61,7 +68,7 @@ func (a ResponseTimeAppender) appendGraph(trafficMap graph.TrafficMap, namespace
 		namespace,
 		int(duration.Seconds()), // range duration for the query
 		groupBy)
-	unkVector := promQuery(query, time.Unix(a.QueryTime, 0), client.API())
+	unkVector := promQuery(query, time.Unix(a.QueryTime, 0), client.API(), a)
 
 	// 2) query for responseTime originating from a workload outside of the namespace. Exclude any "unknown" source telemetry (an unusual corner case)
 	query = fmt.Sprintf(`histogram_quantile(%.2f, sum(rate(%s{reporter="source",source_workload_namespace!="%v",source_workload!="unknown",destination_service_namespace="%v",response_code=~"2[0-9]{2}"}[%vs])) by (%s))`,
@@ -71,7 +78,7 @@ func (a ResponseTimeAppender) appendGraph(trafficMap graph.TrafficMap, namespace
 		namespace,
 		int(duration.Seconds()), // range duration for the query
 		groupBy)
-	outVector := promQuery(query, time.Unix(a.QueryTime, 0), client.API())
+	outVector := promQuery(query, time.Unix(a.QueryTime, 0), client.API(), a)
 
 	// 3) query for responseTime originating from a workload inside of the namespace
 	query = fmt.Sprintf(`histogram_quantile(%.2f, sum(rate(%s{reporter="source",source_workload_namespace="%v",response_code=~"2[0-9]{2}"}[%vs])) by (%s))`,
@@ -80,7 +87,7 @@ func (a ResponseTimeAppender) appendGraph(trafficMap graph.TrafficMap, namespace
 		namespace,
 		int(duration.Seconds()), // range duration for the query
 		groupBy)
-	inVector := promQuery(query, time.Unix(a.QueryTime, 0), client.API())
+	inVector := promQuery(query, time.Unix(a.QueryTime, 0), client.API(), a)
 
 	// create map to quickly look up responseTime
 	responseTimeMap := make(map[string]float64)
@@ -103,7 +110,7 @@ func (a ResponseTimeAppender) appendGraph(trafficMap graph.TrafficMap, namespace
 				groupBy)
 
 			// fetch the externally originating request traffic time-series
-			outIstioVector := promQuery(query, time.Unix(a.QueryTime, 0), client.API())
+			outIstioVector := promQuery(query, time.Unix(a.QueryTime, 0), client.API(), a)
 			a.populateResponseTimeMap(responseTimeMap, &outIstioVector)
 		}
 
@@ -117,7 +124,7 @@ func (a ResponseTimeAppender) appendGraph(trafficMap graph.TrafficMap, namespace
 			groupBy)
 
 		// fetch the internally originating request traffic time-series
-		inIstioVector := promQuery(query, time.Unix(a.QueryTime, 0), client.API())
+		inIstioVector := promQuery(query, time.Unix(a.QueryTime, 0), client.API(), a)
 		a.populateResponseTimeMap(responseTimeMap, &inIstioVector)
 	}
 
